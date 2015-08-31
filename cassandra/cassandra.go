@@ -3,6 +3,7 @@ package cassandra
 // #cgo LDFLAGS: -lcassandra
 // #include <stdlib.h>
 // #include <cassandra.h>
+// #include "cassandra-types.h"
 import "C"
 import "unsafe"
 import "errors"
@@ -61,6 +62,13 @@ type Uuid struct {
 	cptr *C.struct_CassUuid_
 }
 
+func (u Uuid) String() string {
+	var str C.CassString
+	C.cass_uuid_string(*u.cptr, str.data)
+	str.length = C.CASS_UUID_STRING_LENGTH
+	return C.GoStringN(str.data, C.int(str.length))
+}
+
 type UuidGenerator struct {
 	cptr *C.struct_CassUuidGen_
 }
@@ -68,6 +76,10 @@ type UuidGenerator struct {
 func NewCluster() *Cluster {
 	cluster := new(Cluster)
 	cluster.cptr = C.cass_cluster_new()
+
+	/* Latency-aware routing enabled with the default settings */
+	C.cass_cluster_set_latency_aware_routing(cluster.cptr, C.cass_true)
+
 	// defer cluster.Finalize()
 
 	return cluster
@@ -82,11 +94,11 @@ func NewSession() *Session {
 func NewStatement(query string, param_count int) *Statement {
 	var cass_query C.struct_CassString_
 	cass_query.data = C.CString(query)
-	cass_query.length = C.cass_size_t(len(query))
+	cass_query.length = C.size_t(len(query))
 	defer C.free(unsafe.Pointer(cass_query.data))
 
 	statement := new(Statement)
-	statement.cptr = C.cass_statement_new(cass_query, C.cass_size_t(param_count))
+	statement.cptr = C.cass_statement_new_n(cass_query.data, cass_query.length, C.size_t(param_count))
 	// defer statement.Finalize()
 	return statement
 }
@@ -121,7 +133,6 @@ func (generator *UuidGenerator) NewUuidFromTime(timestamp uint64) *Uuid {
 	return uuid
 }
 
-
 func (prepared *Prepared) Bind() *Statement {
 	statement := new(Statement)
 	statement.cptr = C.cass_prepared_bind(prepared.cptr)
@@ -137,42 +148,42 @@ func (statement *Statement) Bind(args ...interface{}) error {
 		switch v := v.(type) {
 
 		case nil:
-			err = C.cass_statement_bind_null(statement.cptr, C.cass_size_t(i))
+			err = C.cass_statement_bind_null(statement.cptr, C.size_t(i))
 
 		case int32:
-			err = C.cass_statement_bind_int32(statement.cptr, C.cass_size_t(i), C.cass_int32_t(v))
+			err = C.cass_statement_bind_int32(statement.cptr, C.size_t(i), C.cass_int32_t(v))
 
 		case int64:
-			err = C.cass_statement_bind_int64(statement.cptr, C.cass_size_t(i), C.cass_int64_t(v))
+			err = C.cass_statement_bind_int64(statement.cptr, C.size_t(i), C.cass_int64_t(v))
 
 		case float32:
-			err = C.cass_statement_bind_float(statement.cptr, C.cass_size_t(i), C.cass_float_t(v))
+			err = C.cass_statement_bind_float(statement.cptr, C.size_t(i), C.cass_float_t(v))
 
 		case float64:
-			err = C.cass_statement_bind_double(statement.cptr, C.cass_size_t(i), C.cass_double_t(v))
+			err = C.cass_statement_bind_double(statement.cptr, C.size_t(i), C.cass_double_t(v))
 
 		case bool:
 			if v {
-				err = C.cass_statement_bind_bool(statement.cptr, C.cass_size_t(i), 1)
+				err = C.cass_statement_bind_bool(statement.cptr, C.size_t(i), 1)
 			} else {
-				err = C.cass_statement_bind_bool(statement.cptr, C.cass_size_t(i), 0)
+				err = C.cass_statement_bind_bool(statement.cptr, C.size_t(i), 0)
 			}
 
 		case string:
 			var str C.CassString
 			str.data = C.CString(v)
-			str.length = C.cass_size_t(len(v))
+			str.length = C.size_t(len(v))
 			defer C.free(unsafe.Pointer(str.data))
-			err = C.cass_statement_bind_string(statement.cptr, C.cass_size_t(i), str)
+			err = C.cass_statement_bind_string_n(statement.cptr, C.size_t(i), str.data, str.length)
 
 		case []byte:
 			var bytes C.CassBytes
 			bytes.data = (*C.cass_byte_t)(unsafe.Pointer(&v))
-			bytes.size = C.cass_size_t(len(v))
-			err = C.cass_statement_bind_bytes(statement.cptr, C.cass_size_t(i), bytes)
+			bytes.size = C.size_t(len(v))
+			err = C.cass_statement_bind_bytes(statement.cptr, C.size_t(i), bytes.data, bytes.size)
 
 		case *Uuid:
-			C.cass_statement_bind_uuid(statement.cptr, C.cass_size_t(i), *v.cptr)
+			C.cass_statement_bind_uuid(statement.cptr, C.size_t(i), *v.cptr)
 		}
 
 	}
@@ -218,8 +229,6 @@ func (generator *UuidGenerator) Finalize() {
 	C.cass_uuid_gen_free(generator.cptr)
 	generator.cptr = nil
 }
-
-
 
 func (future *Future) Result() *Result {
 	result := new(Result)
@@ -279,12 +288,13 @@ func (result *Result) ColumnCount() uint64 {
 }
 
 func (result *Result) ColumnName(index uint64) string {
-	column_name := C.cass_result_column_name(result.cptr, C.cass_size_t(index))
+	var column_name C.CassString
+	C.cass_result_column_name(result.cptr, C.size_t(index), &(column_name.data), &(column_name.length))
 	return C.GoStringN(column_name.data, C.int(column_name.length))
 }
 
 func (result *Result) ColumnType(index uint64) int {
-	return int(C.cass_result_column_type(result.cptr, C.cass_size_t(index)))
+	return int(C.cass_result_column_type(result.cptr, C.size_t(index)))
 }
 
 func (result *Result) HasMorePages() bool {
@@ -309,13 +319,13 @@ func (result *Result) Scan(args ...interface{}) error {
 	var err C.CassError = C.CASS_OK
 
 	for i, v := range args {
-		value := C.cass_row_get_column(row, C.cass_size_t(i))
+		value := C.cass_row_get_column(row, C.size_t(i))
 
 		switch v := v.(type) {
 
 		case *string:
 			var str C.CassString
-			err = C.cass_value_get_string(value, &str)
+			err = C.cass_value_get_string(value, &str.data, &str.length)
 			if err != C.CASS_OK {
 				return errors.New(C.GoString(C.cass_error_desc(err)))
 			}
@@ -323,7 +333,7 @@ func (result *Result) Scan(args ...interface{}) error {
 
 		case *[]byte:
 			var b C.CassBytes
-			err = C.cass_value_get_bytes(value, &b)
+			err = C.cass_value_get_bytes(value, &b.data, &b.size)
 			if err != C.CASS_OK {
 				return errors.New(C.GoString(C.cass_error_desc(err)))
 			}

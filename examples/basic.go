@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	"golang-driver/cassandra"
+	"github.com/CrowdStrike/golang-driver/cassandra"
 )
 
 func main() {
 	cluster := cassandra.NewCluster()
-	cluster.SetContactPoints("cassandra")
+	cluster.SetContactPoints("127.0.0.1")
 	defer cluster.Finalize()
 
 	session := cassandra.NewSession()
